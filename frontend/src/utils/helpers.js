@@ -29,15 +29,48 @@ export const exportToCSV = (data, columns, filename = 'export.csv') => {
   // Export data to JSON
   export const exportToJSON = (data, filename = 'export.json') => {
     if (!data || data.length === 0) return;
-  
+
     const json = JSON.stringify(data, null, 2);
-  
+
     const blob = new Blob([json], { type: 'application/json;charset=utf-8;' });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
     link.download = filename;
     link.click();
     URL.revokeObjectURL(link.href);
+  };
+
+  // Export data to Excel
+  export const exportToExcel = async (data, columns, filename = 'export.xlsx') => {
+    if (!data || data.length === 0) return;
+
+    // Dynamic import to reduce initial bundle size
+    const XLSX = await import('xlsx');
+
+    // Convert data to worksheet format
+    const worksheetData = [
+      columns, // Headers
+      ...data.map(row => columns.map(col => row[col] ?? ''))
+    ];
+
+    const worksheet = XLSX.utils.aoa_to_sheet(worksheetData);
+
+    // Auto-size columns
+    const colWidths = columns.map((col, idx) => {
+      const maxLength = Math.max(
+        col.length,
+        ...data.slice(0, 100).map(row => String(row[col] ?? '').length)
+      );
+      return { wch: Math.min(maxLength + 2, 50) };
+    });
+    worksheet['!cols'] = colWidths;
+
+    // Create workbook
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Query Results');
+
+    // Download
+    XLSX.writeFile(workbook, filename);
   };
   
   // Format execution time

@@ -95,6 +95,12 @@ const ResultsGrid = ({ result, onExport }) => {
               CSV
             </button>
             <button
+              onClick={() => handleExport('excel')}
+              className="px-3 py-1 text-xs bg-green-700 hover:bg-green-600 text-white rounded transition-colors"
+            >
+              Excel
+            </button>
+            <button
               onClick={() => handleExport('json')}
               className="px-3 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-white rounded transition-colors"
             >
