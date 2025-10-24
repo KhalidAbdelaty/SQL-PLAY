@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Split from 'react-split';
 import SQLEditor from './components/Editor';
@@ -7,40 +7,67 @@ import SchemaTree from './components/SchemaTree';
 import QueryHistory from './components/QueryHistory';
 import ConfirmDialog from './components/ConfirmDialog';
 import SessionHeader from './components/SessionHeader';
+import ThemeToggle from './components/ThemeToggle';
+import TabBar from './components/TabBar';
+import TemplateLibrary from './components/TemplateLibrary';
+import ChartVisualization from './components/ChartVisualization';
+import AnalyticsDashboard from './components/AnalyticsDashboard';
+import PerformanceProfiler from './components/PerformanceProfiler';
+import VisualQueryBuilder from './components/VisualQueryBuilder';
 import LoginPage from './pages/LoginPage';
 import ProtectedRoute from './components/ProtectedRoute';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { ThemeProvider } from './contexts/ThemeContext';
+import { TabProvider, useTab } from './contexts/TabContext';
+import { TemplateProvider } from './contexts/TemplateContext';
 import { apiService } from './services/api';
-import { exportToCSV, exportToJSON } from './utils/helpers';
-import { Database, Activity, Settings, Github } from 'lucide-react';
+import { exportToCSV, exportToJSON, exportToExcel } from './utils/helpers';
+import { Database, BarChart2, Activity, FileText, Zap, Box } from 'lucide-react';
 
 // Main SQL Playground Component (protected)
 function SQLPlayground() {
   const { user, isAdmin, isSandbox } = useAuth();
-  
-  const [query, setQuery] = useState('-- Write your SQL query here\nSELECT @@VERSION AS [SQL Server Version]');
-  const [result, setResult] = useState(null);
-  const [isExecuting, setIsExecuting] = useState(false);
+  const {
+    activeTab,
+    updateActiveTabQuery,
+    updateActiveTabResult,
+    setActiveTabExecuting,
+  } = useTab();
+
   const [currentDatabase, setCurrentDatabase] = useState(null);
   const [connectionStatus, setConnectionStatus] = useState({ connected: false });
   const [showConfirm, setShowConfirm] = useState(false);
   const [confirmData, setConfirmData] = useState(null);
   const [historyKey, setHistoryKey] = useState(0);
+  const [schema, setSchema] = useState(null);
+
+  // Modal states
+  const [showTemplates, setShowTemplates] = useState(false);
+  const [showChart, setShowChart] = useState(false);
+  const [showAnalytics, setShowAnalytics] = useState(false);
+  const [showPerformance, setShowPerformance] = useState(false);
+  const [showQueryBuilder, setShowQueryBuilder] = useState(false);
 
   useEffect(() => {
     checkConnection();
-    
+
     // Set default database for sandbox users
     if (isSandbox && user?.database_name) {
       setCurrentDatabase(user.database_name);
     }
   }, [user, isSandbox]);
 
+  useEffect(() => {
+    if (currentDatabase) {
+      fetchSchema();
+    }
+  }, [currentDatabase]);
+
   const checkConnection = async () => {
     try {
       const status = await apiService.testConnection();
       setConnectionStatus(status);
-      
+
       // For admin users, set database from connection status
       if (isAdmin && status.database && !currentDatabase) {
         setCurrentDatabase(status.database);
@@ -51,20 +78,27 @@ function SQLPlayground() {
     }
   };
 
+  const fetchSchema = async () => {
+    try {
+      const response = await apiService.get(`/api/schema/${currentDatabase}`);
+      setSchema(response.data);
+    } catch (err) {
+      console.error('Failed to fetch schema:', err);
+    }
+  };
+
   const handleExecuteQuery = async (confirmDestructive = false, queryToExecute = null) => {
-    // Use provided query or fall back to state query
-    const queryText = queryToExecute !== null ? queryToExecute : query;
-    
-    // Ensure queryText is a string
+    const queryText = queryToExecute !== null ? queryToExecute : activeTab.query;
+
     if (typeof queryText !== 'string' || !queryText.trim()) {
-      setResult({
+      updateActiveTabResult({
         success: false,
         error: 'Please enter a query to execute'
       });
       return;
     }
 
-    setIsExecuting(true);
+    setActiveTabExecuting(true);
 
     try {
       const result = await apiService.executeQuery(
@@ -80,21 +114,21 @@ function SQLPlayground() {
           affected: result.affected_objects,
         });
         setShowConfirm(true);
-        setIsExecuting(false);
+        setActiveTabExecuting(false);
         return;
       }
 
-      setResult(result);
+      updateActiveTabResult(result);
       setHistoryKey(prev => prev + 1);
       setShowConfirm(false);
       setConfirmData(null);
     } catch (err) {
-      setResult({
+      updateActiveTabResult({
         success: false,
         error: err.error || 'Query execution failed'
       });
     } finally {
-      setIsExecuting(false);
+      setActiveTabExecuting(false);
     }
   };
 
@@ -106,11 +140,11 @@ function SQLPlayground() {
   const handleCancelExecution = () => {
     setShowConfirm(false);
     setConfirmData(null);
-    setIsExecuting(false);
+    setActiveTabExecuting(false);
   };
 
-  const handleExport = (format) => {
-    if (!result?.data || result.data.length === 0) {
+  const handleExport = async (format) => {
+    if (!activeTab.result?.data || activeTab.result.data.length === 0) {
       alert('No data to export');
       return;
     }
@@ -119,9 +153,11 @@ function SQLPlayground() {
 
     try {
       if (format === 'csv') {
-        exportToCSV(result.data, result.columns, filename);
+        exportToCSV(activeTab.result.data, activeTab.result.columns, filename);
       } else if (format === 'json') {
-        exportToJSON(result.data, filename);
+        exportToJSON(activeTab.result.data, filename);
+      } else if (format === 'excel') {
+        await exportToExcel(activeTab.result.data, activeTab.result.columns, filename);
       }
     } catch (err) {
       console.error('Export failed:', err);
@@ -130,20 +166,24 @@ function SQLPlayground() {
   };
 
   const handleSelectQuery = (historyQuery) => {
-    setQuery(historyQuery);
+    updateActiveTabQuery(historyQuery);
   };
 
   const handleDatabaseChange = (database) => {
     setCurrentDatabase(database);
   };
 
+  const handleVisualQueryGenerate = (sql) => {
+    updateActiveTabQuery(sql);
+  };
+
   return (
-    <div className="h-screen flex flex-col bg-gray-900">
+    <div className="h-screen flex flex-col bg-gray-900 dark:bg-gray-950">
       {/* Session Header */}
       <SessionHeader />
 
       {/* Main Header */}
-      <div className="flex items-center justify-between px-6 py-4 bg-gray-800 border-b border-gray-700">
+      <div className="flex items-center justify-between px-6 py-4 bg-gray-800 dark:bg-gray-900 border-b border-gray-700 dark:border-gray-800">
         <div className="flex items-center gap-3">
           <Database className="w-8 h-8 text-blue-500" />
           <div>
@@ -153,8 +193,62 @@ function SQLPlayground() {
             </p>
           </div>
         </div>
-        
-        <div className="flex items-center gap-4">
+
+        <div className="flex items-center gap-3">
+          {/* Feature Buttons */}
+          <button
+            onClick={() => setShowQueryBuilder(true)}
+            className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-700 dark:bg-gray-800 hover:bg-gray-600 text-gray-300 transition-all"
+            title="Visual Query Builder"
+          >
+            <Box className="w-4 h-4" />
+            <span className="text-sm hidden md:inline">Builder</span>
+          </button>
+
+          <button
+            onClick={() => setShowTemplates(true)}
+            className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-700 dark:bg-gray-800 hover:bg-gray-600 text-gray-300 transition-all"
+            title="Query Templates"
+          >
+            <FileText className="w-4 h-4" />
+            <span className="text-sm hidden md:inline">Templates</span>
+          </button>
+
+          {activeTab.result?.data && activeTab.result.data.length > 0 && (
+            <>
+              <button
+                onClick={() => setShowChart(true)}
+                className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-700 dark:bg-gray-800 hover:bg-gray-600 text-gray-300 transition-all"
+                title="Visualize Results"
+              >
+                <BarChart2 className="w-4 h-4" />
+                <span className="text-sm hidden md:inline">Visualize</span>
+              </button>
+
+              <button
+                onClick={() => setShowPerformance(true)}
+                className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-700 dark:bg-gray-800 hover:bg-gray-600 text-gray-300 transition-all"
+                title="Performance Profile"
+              >
+                <Zap className="w-4 h-4" />
+                <span className="text-sm hidden md:inline">Performance</span>
+              </button>
+            </>
+          )}
+
+          {isAdmin && (
+            <button
+              onClick={() => setShowAnalytics(true)}
+              className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-700 dark:bg-gray-800 hover:bg-gray-600 text-gray-300 transition-all"
+              title="Analytics Dashboard"
+            >
+              <Activity className="w-4 h-4" />
+              <span className="text-sm hidden md:inline">Analytics</span>
+            </button>
+          )}
+
+          <ThemeToggle />
+
           {connectionStatus.connected ? (
             <div className="flex items-center gap-2 px-3 py-1 bg-green-900/30 border border-green-700 rounded">
               <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
@@ -182,19 +276,19 @@ function SQLPlayground() {
           })}
         >
           {/* Left Sidebar */}
-          <div className="bg-gray-800 overflow-hidden flex flex-col h-full">
+          <div className="bg-gray-800 dark:bg-gray-900 overflow-hidden flex flex-col h-full">
             <div className="flex-1 min-h-0 overflow-auto">
-              <SchemaTree 
+              <SchemaTree
                 currentDatabase={currentDatabase}
                 onDatabaseChange={handleDatabaseChange}
                 onTableSelect={(table) => {
-                  setQuery(`SELECT * FROM ${table.schema}.${table.name}`);
+                  updateActiveTabQuery(`SELECT * FROM ${table.schema}.${table.name}`);
                 }}
               />
             </div>
-            
-            <div className="border-t border-gray-700 h-80 min-h-0 flex flex-col">
-              <QueryHistory 
+
+            <div className="border-t border-gray-700 dark:border-gray-800 h-80 min-h-0 flex flex-col">
+              <QueryHistory
                 key={historyKey}
                 onSelectQuery={handleSelectQuery}
               />
@@ -202,7 +296,10 @@ function SQLPlayground() {
           </div>
 
           {/* Right Content Area */}
-          <div className="flex flex-col bg-gray-900">
+          <div className="flex flex-col bg-gray-900 dark:bg-gray-950">
+            {/* Tab Bar */}
+            <TabBar />
+
             <Split
               direction="vertical"
               sizes={[50, 50]}
@@ -217,10 +314,10 @@ function SQLPlayground() {
               {/* SQL Editor */}
               <div className="overflow-hidden flex flex-col h-full min-h-0">
                 <SQLEditor
-                  value={query}
-                  onChange={setQuery}
+                  value={activeTab.query}
+                  onChange={updateActiveTabQuery}
                   onExecute={handleExecuteQuery}
-                  isExecuting={isExecuting}
+                  isExecuting={activeTab.isExecuting}
                   currentDatabase={currentDatabase}
                 />
               </div>
@@ -228,7 +325,7 @@ function SQLPlayground() {
               {/* Results Grid */}
               <div className="overflow-hidden flex flex-col h-full min-h-0">
                 <ResultsGrid
-                  result={result}
+                  result={activeTab.result}
                   onExport={handleExport}
                 />
               </div>
@@ -238,12 +335,12 @@ function SQLPlayground() {
       </div>
 
       {/* Footer */}
-      <footer className="bg-gray-800 border-t border-gray-700 px-6 py-3">
+      <footer className="bg-gray-800 dark:bg-gray-900 border-t border-gray-700 dark:border-gray-800 px-6 py-3">
         <div className="flex items-center justify-center text-sm text-gray-400">
           <span>© 2025 Khalid Abdelaty | </span>
-          <a 
-            href="https://www.linkedin.com/in/khalidabdelaty/" 
-            target="_blank" 
+          <a
+            href="https://www.linkedin.com/in/khalidabdelaty/"
+            target="_blank"
             rel="noopener noreferrer"
             className="ml-1 text-blue-400 hover:text-blue-300 transition-colors underline"
           >
@@ -252,7 +349,7 @@ function SQLPlayground() {
         </div>
       </footer>
 
-      {/* Confirm Dialog */}
+      {/* Modals */}
       {showConfirm && confirmData && (
         <ConfirmDialog
           operation={confirmData.operation}
@@ -261,6 +358,30 @@ function SQLPlayground() {
           onCancel={handleCancelExecution}
         />
       )}
+
+      <TemplateLibrary isOpen={showTemplates} onClose={() => setShowTemplates(false)} />
+
+      <ChartVisualization
+        data={activeTab.result?.data}
+        columns={activeTab.result?.columns}
+        isOpen={showChart}
+        onClose={() => setShowChart(false)}
+      />
+
+      <AnalyticsDashboard isOpen={showAnalytics} onClose={() => setShowAnalytics(false)} />
+
+      <PerformanceProfiler
+        result={activeTab.result}
+        isOpen={showPerformance}
+        onClose={() => setShowPerformance(false)}
+      />
+
+      <VisualQueryBuilder
+        isOpen={showQueryBuilder}
+        onClose={() => setShowQueryBuilder(false)}
+        onGenerate={handleVisualQueryGenerate}
+        schema={schema}
+      />
     </div>
   );
 }
@@ -269,20 +390,26 @@ function SQLPlayground() {
 function App() {
   return (
     <BrowserRouter>
-      <AuthProvider>
-        <Routes>
-          <Route path="/login" element={<LoginPage />} />
-          <Route
-            path="/"
-            element={
-              <ProtectedRoute>
-                <SQLPlayground />
-              </ProtectedRoute>
-            }
-          />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </AuthProvider>
+      <ThemeProvider>
+        <AuthProvider>
+          <TabProvider>
+            <TemplateProvider>
+              <Routes>
+                <Route path="/login" element={<LoginPage />} />
+                <Route
+                  path="/"
+                  element={
+                    <ProtectedRoute>
+                      <SQLPlayground />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
+            </TemplateProvider>
+          </TabProvider>
+        </AuthProvider>
+      </ThemeProvider>
     </BrowserRouter>
   );
 }
